@@ -17,92 +17,71 @@ data "aws_availability_zones" "available" {}
 
 resource "random_pet" "random" {}
 
-module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
-  version = "5.19.0"
 
-  name                 = "${random_pet.random.id}-education"
-  cidr                 = "10.0.0.0/16"
-  azs                  = data.aws_availability_zones.available.names
-  public_subnets       = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
-  enable_dns_hostnames = true
-  enable_dns_support   = true
-}
-
-resource "aws_db_subnet_group" "education" {
-  name       = "${random_pet.random.id}-education"
-  subnet_ids = module.vpc.public_subnets
+resource "aws_lb" "this" {
+  name                       = var.alb_name
+  internal                   = true
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.this.id]
+  subnets                    = var.subnets
+  enable_deletion_protection = true
+  drop_invalid_header_fields = true
 
   tags = {
-    Name = "${random_pet.random.id} Education"
+    Environment = "dev"
+    Terraform   = "NoCodeDemo"
   }
 }
 
-resource "aws_security_group" "rds" {
-  name   = "${random_pet.random.id}-education_rds"
-  vpc_id = module.vpc.vpc_id
+
+resource "aws_security_group" "this" {
+  name   = "${random_pet.random.id}-${var.alb_name}"
+  vpc_id = var.vpc_id
 
   ingress {
-    from_port   = 5432
-    to_port     = 5432
+    from_port   = 443
+    to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["192.80.0.0/16"]
   }
 
   egress {
-    from_port   = 5432
-    to_port     = 5432
+    from_port   = 443
+    to_port     = 8443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
-resource "aws_db_parameter_group" "education" {
-  name   = "${random_pet.random.id}-education"
-  family = "postgres16"
+resource "aws_lb_listener" "this" {
+  load_balancer_arn        = aws_lb.this.arn
+  port                     = var.listener.ingress_port
+  protocol                 = var.listener.protocol
+  tcp_idle_timeout_seconds = try(var.listener.tcp_idle_timeout, null)
+  ssl_policy               = "ELBSecurityPolicy-2016-08"
+  certificate_arn          = data.aws_acm_certificate.this.arn
 
-  parameter {
-    name  = "log_connections"
-    value = "1"
-  }
-
-  lifecycle {
-    create_before_destroy = true
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.this.arn
   }
 }
 
-ephemeral "random_password" "db_password" {
-  length  = 16
-  special = false
+resource "aws_lb_target_group" "this" {
+  port        = var.listener.ingress_port
+  protocol    = var.listener.protocol
+  target_type = "ip"
+
+  health_check {
+    enabled  = true
+    protocol = "HTTPS"
+    matcher  = "200-499"
+  }
 }
+
 
 locals {
   # Increment db_password_version to update the DB password and store the new
   # password in SSM.
   db_password_version = 1
-}
-
-resource "aws_db_instance" "education" {
-  identifier             = "${var.db_name}-${random_pet.random.id}"
-  instance_class         = "db.t3.micro"
-  allocated_storage      = 5
-  apply_immediately      = true
-  engine                 = "postgres"
-  engine_version         = "16"
-  username               = var.db_username
-  password_wo            = ephemeral.random_password.db_password.result
-  password_wo_version    = local.db_password_version
-  db_subnet_group_name   = aws_db_subnet_group.education.name
-  vpc_security_group_ids = [aws_security_group.rds.id]
-  parameter_group_name   = aws_db_parameter_group.education.name
-  publicly_accessible    = true
-  skip_final_snapshot    = true
-}
-
-resource "aws_ssm_parameter" "secret" {
-  name             = "/education/database/${var.db_name}/password/master"
-  description      = "Password for RDS database."
-  type             = "SecureString"
-  value_wo         = ephemeral.random_password.db_password.result
-  value_wo_version = local.db_password_version
 }
