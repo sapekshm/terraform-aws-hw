@@ -71,7 +71,7 @@ resource "aws_lb_target_group" "this" {
   port        = var.listener.ingress_port
   protocol    = var.listener.protocol
   target_type = "ip"
-
+  vpc_id = var.vpc_id
   health_check {
     enabled  = true
     protocol = "HTTPS"
