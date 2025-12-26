@@ -22,8 +22,8 @@ variable "vpc_id" {
 variable "listener" {
   type = object({
     ingress_port        = number
-    ssl_certificate_arn = string
     protocol            = string
+    tcp_idle_timeout    = number
   })
 }
 
